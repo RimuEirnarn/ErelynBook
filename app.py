@@ -157,10 +157,6 @@ def delete_examples():
     examples.delete_one({'_id': ObjectId(identity)})
     return compose("success", f"Example is deleted. word={word!r}")
 
-@app.get('/api/profanity-filter')
-def pf():
-    return jsonify(profanity_filter)
-
 if __name__ == '__main__':
     try:
         app.run('0.0.0.0', port=5000, debug=True)
