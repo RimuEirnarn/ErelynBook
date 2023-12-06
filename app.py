@@ -1,16 +1,33 @@
 from os import environ, urandom
+from os.path import exists
 from dotenv import load_dotenv
 from flask import Flask, flash, jsonify, redirect, render_template, request
 from pymongo import MongoClient
 import requests
 from datetime import datetime
 from bson import ObjectId
+import gzip
+import csv
 
 load_dotenv()
 app = Flask(__name__)
 app.secret_key = urandom(256)
 app.config['SESSION_COOKIE_SAMESITE'] = "Lax"
 API_KEY = environ.get("API_KEY")
+
+profanity_filter = []
+
+if exists("google-profanity-filter.csv.gz"):
+    with open('google-profanity-filter.csv.gz', 'rb') as f:
+        data = gzip.decompress(f.read()).decode('utf-8')
+        reader = csv.reader(data)
+        previous = ""
+        for row in reader:
+            if row == ['', '']:
+                profanity_filter.append(previous)
+                previous = ""
+                continue
+            previous += ''.join(row)
 
 def compose(status, message):
     return jsonify({'status': status, 'message': message})
@@ -19,7 +36,7 @@ if environ.get("MONGODB_URI", None) and environ.get("environment", None) in ("pr
     client = MongoClient(environ["MONGODB_URI"])
     database = client[environ["DB_NAME"]]
     book = database[environ.get("CL_NAME", "erelynbook")]
-    examples = database[environ.get("CL_NAME", "erelynexamples")]
+    examples = database[environ.get("CL_EX_NAME", "erelynexamples")]
 else:
     print("Tidak ditemukan URI database serta environment tidak production.")
     raise SystemExit(1)
@@ -51,6 +68,10 @@ def detail(keyword):
     response = requests.get(url)
     definitions = response.json()
 
+    if keyword in profanity_filter:
+        flash(f"Your word is... on my filter. You cannot search it, sorry.", "error")
+        return redirect("/")
+
     if not definitions:
         flash(f"word {keyword} is undefined, try another. Perhaps it's a typo?", "error")
         return redirect("/")
@@ -58,6 +79,7 @@ def detail(keyword):
     if isinstance(definitions[0], str):
         flash(f"word {keyword} is undefined. Try {', '.join(definitions)}.", "typo")
         return redirect("/")
+
     return render_template(
         'detail.html',
         word=keyword,
@@ -74,6 +96,7 @@ def save_word():
         return compose("error", "word is empty"), 400
     if not def_:
         return compose("error", "definition is empty"), 400
+
     book.insert_one({
         'word': word,
         'definition': def_,
@@ -113,6 +136,11 @@ def save_example():
         return compose('error', "either word or example is empty"), 400
     if word not in example:
         return compose('error', "user's example does not have a matching word."), 400
+
+    for i in profanity_filter:
+        if i in example:
+            return compose('error', "Your example word may violate my profanity filter."), 400
+
     examples.insert_one({
         'key': word,
         'example': example
@@ -128,6 +156,10 @@ def delete_examples():
         return compose('error', "Either example id or word is empty"), 400
     examples.delete_one({'_id': ObjectId(identity)})
     return compose("success", f"Example is deleted. word={word!r}")
+
+@app.get('/api/profanity-filter')
+def pf():
+    return jsonify(profanity_filter)
 
 if __name__ == '__main__':
     try:
